@@ -1,0 +1,250 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+    <meta charset="UTF-8">
+    <title>Fußgängerbrücken in Ihrer Nähe finden</title>
+    <link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css" />
+    <style>
+        /* CSS für Fullscreen und Styling */
+        html, body {
+            height: 100%;
+            margin: 0;
+            padding: 0;
+            overflow: hidden; /* Verhindert Scrollbalken */
+        }
+
+        body {
+            display: flex;
+            flex-direction: column;
+            font-family: sans-serif;
+        }
+
+        .header-bereich {
+            padding: 20px;
+            background-color: #f4f4f4; /* Optionaler Hintergrund für Header */
+            text-align: center;
+        }
+
+        #map {
+            height: 500px; /* Setze eine feste Höhe oder verwende 100% für Fullscreen */
+            width: 100%;
+            border: 1px solid #ccc; /* Optionaler Rahmen für die Karte */
+            flex-grow: 1; /* Karte nimmt den restlichen Platz ein, falls Flexbox verwendet wird */
+        }
+
+        h1 {
+            text-align: center;
+            color: #333;
+        }
+
+        label {
+            display: block;
+            margin-bottom: 5px;
+            font-weight: bold;
+            color: #555;
+        }
+
+        input[type="text"] {
+            padding: 8px;
+            border: 1px solid #ccc;
+            border-radius: 4px;
+            width: 200px;
+            margin-bottom: 10px;
+        }
+
+        button {
+            padding: 8px 15px;
+            background-color: #007bff;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+        }
+
+        button:hover {
+            background-color: #0056b3;
+        }
+    </style>
+</head>
+<body>
+    <div class="header-bereich">
+        <h1>Fußgängerbrücken in Ihrer Nähe finden</h1>
+        <label for="plzInput">Bitte geben Sie Ihre Postleitzahl (PLZ) ein:</label>
+        <input type="text" id="plzInput" placeholder="z.B. 44269" lang="de">
+        <button id="suchenButton">Suchen</button>
+    </div>
+
+    <div id="map"></div>
+
+    <script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
+    <script>
+        document.addEventListener('DOMContentLoaded', () => {
+            const plzInput = document.getElementById('plzInput');
+            const suchenButton = document.getElementById('suchenButton');
+            const mapDiv = document.getElementById('map');
+
+            let map; // Leaflet Karte Variable
+
+            suchenButton.addEventListener('click', () => {
+                const plz = plzInput.value.trim();
+                if (plz) {
+                    getCoordinatesFromPLZ(plz)
+                        .then(coordinates => {
+                            if (coordinates) {
+                                initMap(coordinates.lat, coordinates.lon);
+                                findBridges(coordinates.lat, coordinates.lon);
+                            } else {
+                                alert("PLZ nicht gefunden. Bitte überprüfen Sie Ihre Eingabe."); // Deutsche Fehlermeldung
+                            }
+                        })
+                        .catch(error => {
+                            console.error("Fehler bei der Geokodierung:", error);
+                            alert("Ein Fehler ist aufgetreten. Bitte versuchen Sie es später noch einmal."); // Deutsche Fehlermeldung
+                        });
+                } else {
+                    alert("Bitte geben Sie eine PLZ ein."); // Deutsche Fehlermeldung
+                }
+            });
+
+            function getCoordinatesFromPLZ(plz) {
+                // Nominatim API für Geokodierung (PLZ zu Koordinaten)
+                const nominatimUrl = `https://nominatim.openstreetmap.org/search?postalcode=${plz}&country=de&format=jsonv2`;
+                console.log("Nominatim URL:", nominatimUrl); // Debugging: URL prüfen
+                return fetch(nominatimUrl)
+                    .then(response => response.json())
+                    .then(data => {
+                        console.log("Nominatim Daten:", data); // Debugging: Daten prüfen
+                        if (data && data.length > 0) {
+                            return { lat: parseFloat(data[0].lat), lon: parseFloat(data[0].lon) };
+                        } else {
+                            return null; // PLZ nicht gefunden
+                        }
+                    });
+            }
+
+            function initMap(lat, lon) {
+                if (map) {
+                    map.remove(); // Entferne alte Karte, falls vorhanden
+                }
+                map = L.map('map').setView([lat, lon], 13); // Karte initialisieren, Zentrum auf PLZ, Zoomstufe 13
+                L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+                    attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
+                }).addTo(map);
+            }
+
+            function findBridges(lat, lon) {
+                // Overpass API Abfrage für Fußgängerbrücken in der Nähe der Koordinaten
+                const overpassQuery = `
+                    [out:json];
+                    (
+                      // Fußgängerbrücken (highway=footway UND bridge=*)
+                      node[highway=footway][bridge](around:10000,${lat},${lon});
+                      way[highway=footway][bridge](around:10000,${lat},${lon});
+                      relation[highway=footway][bridge](around:10000,${lat},${lon});
+
+                      // Fußgängerzonen-Brücken (highway=pedestrian UND bridge=*)
+                      node[highway=pedestrian][bridge](around:10000,${lat},${lon});
+                      way[highway=pedestrian][bridge](around:10000,${lat},${lon});
+                      relation[highway=pedestrian][bridge](around:10000,${lat},${lon});
+
+                      // Explizit als Fußgängerbrücken getaggt (bridge=footbridge)
+                      node[bridge=footbridge](around:10000,${lat},${lon});
+                      way[bridge=footbridge](around:10000,${lat},${lon});
+                      relation[bridge=footbridge](around:10000,${lat},${lon});
+                    );
+                    out body; /* Zurück zu 'out body;' für volle Geometrie */
+                    >;
+                    out skel qt;
+                `;
+                console.log("Overpass Query:", overpassQuery); // Debugging: Query prüfen
+
+                const overpassUrl = 'https://overpass-api.de/api/interpreter';
+
+                fetch(overpassUrl, {
+                    method: 'POST',
+                    body: overpassQuery
+                })
+                .then(response => response.json())
+                .then(data => {
+                    console.log("Overpass Daten:", data); // Debugging: Daten prüfen
+                    if (data && data.elements) {
+                        displayBridgesOnMap(data.elements);
+                    } else {
+                        alert("Keine Fußgängerbrücken in der Nähe gefunden."); // Deutsche Meldung, wenn keine Brücken gefunden
+                    }
+                })
+                .catch(error => {
+                    console.error("Fehler bei der Overpass API Abfrage:", error);
+                    alert("Fehler beim Abrufen der Brückendaten. Bitte versuchen Sie es später noch einmal."); // Deutsche Fehlermeldung
+                });
+            }
+
+            function displayBridgesOnMap(bridges) {
+                console.log("Anzahl Brücken in displayBridgesOnMap:", bridges.length);
+                const aggregatedBridges = {}; // Objekt, um Brücken nach ID zu aggregieren
+
+                bridges.forEach(bridge => {
+                    const bridgeId = bridge.id; // OSM-ID der Brücke
+                    let coordinates;
+
+                    if (bridge.type === 'node') {
+                        coordinates = [bridge.lat, bridge.lon];
+                    } else if (bridge.type === 'way' || bridge.type === 'relation') {
+                        if (bridge.center) {
+                            coordinates = [bridge.center.lat, bridge.center.lon];
+                        } else if (bridge.geometry && bridge.geometry.length > 0) {
+                            coordinates = [bridge.geometry[0].lat, bridge.geometry[0].lon];
+                        } else {
+                            console.log("Keine Koordinaten für Brücke gefunden:", bridge.id);
+                            return;
+                        }
+                    }
+
+                    if (coordinates) {
+                        if (aggregatedBridges[bridgeId]) {
+                            // Brücke existiert schon in der Aggregation, füge Koordinaten hinzu (optional, für genauere Centroid-Berechnung)
+                            aggregatedBridges[bridgeId].coordinates.push(coordinates);
+                        } else {
+                            // Neue Brücke in der Aggregation
+                            aggregatedBridges[bridgeId] = {
+                                id: bridgeId,
+                                type: bridge.type,
+                                tags: bridge.tags,
+                                coordinates: [coordinates] // Array für Koordinaten, falls mehrere Elemente zur selben Brücke gehören
+                            };
+                        }
+                    }
+                });
+
+                console.log("Anzahl Aggregierte Brücken:", Object.keys(aggregatedBridges).length);
+
+                for (const bridgeId in aggregatedBridges) {
+                    const aggregatedBridge = aggregatedBridges[bridgeId];
+                    // Berechne Centroid für die aggregierte Brücke (Mittelwert aller Koordinaten)
+                    let centroidLat = 0;
+                    let centroidLon = 0;
+                    aggregatedBridge.coordinates.forEach(coord => {
+                        centroidLat += coord[0];
+                        centroidLon += coord[1];
+                    });
+                    const centroid = [centroidLat / aggregatedBridge.coordinates.length, centroidLon / aggregatedBridge.coordinates.length];
+
+
+                    L.marker(centroid) // Marker am Centroid der aggregierten Brücke setzen
+                        .addTo(map)
+                        .bindPopup(getBridgePopupContent(aggregatedBridge.tags)); // Popup mit Infos (Tags)
+                }
+            }
+
+
+            function getBridgePopupContent(bridgeTags) { // Nimmt jetzt bridgeTags als Argument
+                let popupContent = "<b>Fußgängerbrücke</b>";
+                if (bridgeTags && bridgeTags.name) {
+                    popupContent += `<br>Name: ${bridgeTags.name}`;
+                }
+                return popupContent;
+            }
+        });
+    </script>
+</body>
+</html>
